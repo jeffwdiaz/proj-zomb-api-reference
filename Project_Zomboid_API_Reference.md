@@ -83,11 +83,14 @@ Purpose: Comprehensive reference of the core APIs available in Project Zomboid f
 
 - **InventoryItem:getDisplayName() -> string** and **InventoryItem:getType() -> string**: Item identity helpers.
 
-- **InventoryItem:getContainer() -> ItemContainer|nil**: Returns nested container if the item is itself a container (e.g., bags). Enables recursive searches.
+- **InventoryItem:getContainer() -> ItemContainer|nil**: Returns the container that holds THIS item (e.g., the player's inventory that contains the bag).
+- **InventoryItem:getInventory() -> ItemContainer|nil**: Returns the inventory container inside THIS item (e.g., the contents of a bag).
+
+**IMPORTANT**: For searching bag contents, use `IsInventoryContainer()` + `getInventory()`, NOT `getContainer()`.
 
 ### Worn Equipment
 
-- **IsoPlayer:getClothingItem_Back() -> InventoryItem|nil**: Currently worn back item (e.g., backpack). Use `:getContainer()` to inspect contents.
+- **IsoPlayer:getClothingItem_Back() -> InventoryItem|nil**: Currently worn back item (e.g., backpack). Use `:IsInventoryContainer()` and `:getInventory()` to inspect contents.
 
 ---
 
@@ -134,6 +137,14 @@ Purpose: Comprehensive reference of the core APIs available in Project Zomboid f
 - **ISTimedActionQueue.clear(character)**: Removes all actions from a character's queue.
 
   - **Emergency**: Clear queue if player needs to perform urgent actions.
+
+### Inventory Transfer Actions
+
+- **ISInventoryTransferAction:new(character, item, fromContainer, toContainer)**: Moves items between containers.
+
+  - **Essential for bag operations**: Move items from bags to main inventory for consumption.
+  - **Usage**: `ISTimedActionQueue.add(ISInventoryTransferAction:new(player, item, bag, mainInventory))`.
+  - **Pattern**: Move → Consume → Move Back (for items that need to return to original location).
 
 ### Action Lifecycle
 
@@ -404,6 +415,40 @@ function onInventorySearchKeybindPressed()
         end
     end
 end
+
+-- RECOMMENDED: Recursive container search (searches ALL equipped containers)
+function searchAllContainersRecursive(inventory, checkFunction, itemName)
+    if not inventory then return nil, nil end
+
+    for i = 0, inventory:getItems():size() - 1 do
+        local item = inventory:getItems():get(i)
+
+        if item and checkFunction(item) then
+            return item, inventory
+        end
+
+        -- Check containers recursively (searches ALL equipped bags automatically)
+        if item:IsInventoryContainer() then
+            local subInventory = item:getInventory()
+            if subInventory then
+                local found, foundIn = searchAllContainersRecursive(subInventory, checkFunction, itemName)
+                if found then
+                    return found, foundIn
+                end
+            end
+        end
+    end
+    return nil, nil
+end
+
+-- Usage: Search through main inventory and ALL equipped containers
+local function findMedication(player, checkFunction, medicationName)
+    return searchAllContainersRecursive(player:getInventory(), checkFunction, medicationName)
+end
+
+-- DEPRECATED: Old approach that only searched specific bag slots (LIMITED)
+-- This approach has been replaced by the recursive container search above
+-- function searchEquippedBags(player, targetItemType) -- REMOVED
 ```
 
 ---
@@ -425,6 +470,11 @@ end
   - Root cause: Custom actions must properly implement expected interface
   - Solution: Use built-in actions when available
   - Best practice: Test custom actions thoroughly in Build 42
+- **Inventory Search & Container Handling**: ✅ COMPLETED - Recursive container search implemented
+  - Recursive search covers ALL equipped containers (back, hands, waist, shoulder, etc.)
+  - Move → Consume → Move Back pattern for items in bags
+  - Uses `ISInventoryTransferAction` for reliable container operations
+  - Solves consumption issues with items in different container types
 - **Place Action**: Full implementation pattern confirmed from InvContextMovable.lua
 - **Disassemble Action**: "scrap" mode confirmed working with ISMoveableCursor
 - **Pick Up Action**: "pickup" mode confirmed working with ISMoveableCursor
@@ -461,6 +511,89 @@ end
 - **ISMoveableCursor:getMoveableMode() -> string**: Returns current cursor mode for debugging.
 - **ISTimedActionQueue.isPlayerDoingAction(player)**: Check if player is performing actions.
 - **queue:indexOfType(actionType)**: Debug what actions are in the queue.
+
+## Common Mistakes and Troubleshooting
+
+### ❌ INCORRECT: Searching Bag Contents
+
+```lua
+-- WRONG - This searches the player's inventory, not the bag contents
+local bag = player:getClothingItem_Back()
+local bagContainer = bag:getContainer()        -- Gets player's inventory
+local bagItems = bagContainer:getItems()      -- Searches player's inventory
+```
+
+### ✅ CORRECT: Searching Bag Contents
+
+```lua
+-- RIGHT - This searches the actual bag contents
+local bag = player:getClothingItem_Back()
+if bag and bag:IsInventoryContainer() then
+    local bagInventory = bag:getInventory()    -- Gets the bag's inventory
+    local bagItems = bagInventory:getItems()   -- Searches the bag's contents
+end
+```
+
+### 🔥 RECOMMENDED: Search ALL Equipped Containers
+
+```lua
+-- BEST - Recursively searches ALL equipped containers automatically
+function searchAllContainersRecursive(inventory, checkFunction, itemName)
+    if not inventory then return nil, nil end
+
+    for i = 0, inventory:getItems():size() - 1 do
+        local item = inventory:getItems():get(i)
+
+        if item and checkFunction(item) then
+            return item, inventory  -- Returns item AND its container
+        end
+
+        -- Recursively search any container (bags, fanny packs, etc.)
+        if item:IsInventoryContainer() then
+            local subInventory = item:getInventory()
+            if subInventory then
+                local found, foundIn = searchAllContainersRecursive(subInventory, checkFunction, itemName)
+                if found then
+                    return found, foundIn
+                end
+            end
+        end
+    end
+    return nil, nil
+end
+```
+
+### 🎯 Handling Items from Different Containers
+
+```lua
+-- When consuming items from bags, move to main inventory first
+local medication, originalContainer = searchAllContainersRecursive(player:getInventory(), checkFunction, "medication")
+
+if medication then
+    local needsReturn = (originalContainer ~= player:getInventory())
+
+    if needsReturn then
+        -- Move to main inventory for consumption
+        ISTimedActionQueue.add(ISInventoryTransferAction:new(player, medication, originalContainer, player:getInventory()))
+    end
+
+    -- Consume from main inventory (where actions work properly)
+    local consumeAction = ISTakePillAction:new(player, medication)
+    ISTimedActionQueue.add(consumeAction)
+
+    if needsReturn then
+        -- Move back to original container
+        ISTimedActionQueue.add(ISInventoryTransferAction:new(player, medication, player:getInventory(), originalContainer))
+    end
+end
+```
+
+### Key Differences:
+
+- **`getContainer()`**: Returns what contains THIS item (e.g., player inventory contains the bag)
+- **`getInventory()`**: Returns what THIS item contains (e.g., bag contains items)
+- **`IsInventoryContainer()`**: Checks if the item can hold other items before calling getInventory()
+- **Recursive Search**: Automatically finds items in ANY equipped container (back, hands, waist, shoulder, etc.)
 
 ---
 
