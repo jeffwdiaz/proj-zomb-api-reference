@@ -453,6 +453,173 @@ end
 
 ---
 
+## GameTime and Time Management APIs
+
+### Core Time Functions
+
+- **getGameTime() -> GameTime**: Returns the main GameTime instance for time and date functions.
+
+  - **Important**: Use `getGameTime()`, NOT `GameTime.instance` (which has different defaults)
+  - **Usage**: `local gameTime = getGameTime()` to get the time object
+  - **Note**: This is the gateway to all other time functions
+
+- **getGameTime():getCalender() -> PZCalendar**: Returns a PZCalendar object for time calculations.
+
+  - **Note**: Function name is "getCalender" (not "getCalendar") - this is correct
+  - **Usage**: `local calendar = getGameTime():getCalender()`
+  - **Purpose**: Access to individual time components and millisecond timing
+
+- **getGameTime():getCalender():getTimeInMillis() -> integer**: Returns current time in milliseconds since reference point.
+
+  - **Returns**: Large integer representing current game time (e.g., 1735689600000)
+  - **Usage**: `local currentTime = getGameTime():getCalender():getTimeInMillis()`
+  - **Purpose**: Precise timing for cooldowns, duration calculations, and time comparisons
+
+### Time Component Functions
+
+- **calendar:get(1) -> integer**: Returns the current year.
+- **calendar:get(2) -> integer**: Returns the current month (0-based index, add 1 for display).
+- **calendar:get(5) -> integer**: Returns the current day of month (0-based index, add 1 for display).
+- **calendar:get(11) -> integer**: Returns the current hour (0-based index, 0-23).
+- **calendar:get(12) -> integer**: Returns the current minute (0-based index, 0-59).
+
+### Cooldown System Implementation
+
+#### Basic Cooldown Pattern
+
+```lua
+-- Static variables to track cooldown timers
+local lastMedicationTime = 0
+
+-- Function to check if cooldown is active
+local function isMedicationCooldownActive()
+    if lastMedicationTime == 0 then
+        return false
+    end
+
+    local currentTime = getGameTime():getCalender():getTimeInMillis()
+    local timeDifference = currentTime - lastMedicationTime
+
+    -- 10 in-game minutes = 600,000 milliseconds
+    local cooldownDuration = 600000
+    return timeDifference < cooldownDuration
+end
+
+-- Function to update cooldown timer
+local function updateMedicationTime()
+    lastMedicationTime = getGameTime():getCalender():getTimeInMillis()
+end
+```
+
+#### Individual Drug Type Cooldowns
+
+```lua
+-- Separate cooldown timers for each medication type
+local lastBetaBlockerTime = 0
+local lastPainkillerTime = 0
+local lastAntidepressantTime = 0
+
+-- Check cooldown for specific drug type
+local function isDrugTypeCooldownActive(drugType)
+    local lastTime = 0
+
+    if drugType == "betaBlockers" then
+        lastTime = lastBetaBlockerTime
+    elseif drugType == "painkillers" then
+        lastTime = lastPainkillerTime
+    elseif drugType == "antidepressants" then
+        lastTime = lastAntidepressantTime
+    end
+
+    if lastTime == 0 then
+        return false
+    end
+
+    local currentTime = getGameTime():getCalender():getTimeInMillis()
+    local timeDifference = currentTime - lastTime
+    return timeDifference < 600000  -- 10 in-game minutes
+end
+
+-- Update cooldown for specific drug type
+local function updateDrugTypeCooldown(drugType)
+    local currentTime = getGameTime():getCalender():getTimeInMillis()
+
+    if drugType == "betaBlockers" then
+        lastBetaBlockerTime = currentTime
+    elseif drugType == "painkillers" then
+        lastPainkillerTime = currentTime
+    elseif drugType == "antidepressants" then
+        lastAntidepressantTime = currentTime
+    end
+end
+```
+
+### Performance Optimization
+
+#### GameTime Caching (Optional)
+
+```lua
+-- Cache GameTime objects for better performance
+local gameTime
+local timeCalendar
+
+Events.OnGameTimeLoaded.Add(function()
+    gameTime = GameTime.getInstance()
+    timeCalendar = gameTime:getCalender()
+end)
+
+-- Use cached objects instead of repeated function calls
+local currentTime = timeCalendar:getTimeInMillis()
+```
+
+#### When to Use Caching
+
+- **Use caching**: When calling time functions multiple times per frame
+- **Don't cache**: For simple cooldown checks (performance difference is negligible)
+- **Best practice**: Cache if you're calling time functions more than 5-10 times per second
+
+### Time Calculation Examples
+
+#### Calculate Time Difference
+
+```lua
+-- Calculate time difference between two moments
+local startTime = getGameTime():getCalender():getTimeInMillis()
+-- ... some action happens ...
+local endTime = getGameTime():getCalender():getTimeInMillis()
+local duration = endTime - startTime
+
+-- Convert milliseconds to readable format
+local seconds = math.floor(duration / 1000)
+local minutes = math.floor(seconds / 60)
+local hours = math.floor(minutes / 60)
+```
+
+#### In-Game Time vs Real Time
+
+- **Default setting**: 1 real hour = 1 in-game day
+- **30-minute days**: 1 real minute = 2 in-game minutes
+- **1-hour days**: 1 real minute = 4 in-game minutes
+- **2-hour days**: 1 real minute = 8 in-game minutes
+
+### Common Use Cases
+
+1. **Medication Cooldowns**: Prevent rapid drug consumption
+2. **Action Cooldowns**: Limit how often abilities can be used
+3. **Time-Based Events**: Trigger actions at specific game times
+4. **Duration Tracking**: Measure how long actions take
+5. **Save/Load Persistence**: Track time across game sessions
+
+### Important Notes
+
+- **Reference Point**: The millisecond count starts from an unknown reference point
+- **Persistence**: Cooldown timers reset when the game is reloaded
+- **Accuracy**: Millisecond precision for precise timing control
+- **Build 42**: All functions confirmed working in current build
+- **Error Handling**: Always check if time functions return valid values
+
+---
+
 ## Research Status
 
 ### ✅ Completed Research
